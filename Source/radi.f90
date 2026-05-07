@@ -3811,46 +3811,7 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
                X_CO  = GET_VOLUME_FRACTION(CO_INDEX,Z_ARRAY,R_MIXTURE)
 	            CALL GET_MASS_FRACTION(Z_ARRAY,SOOT_INDEX,SOOT_MASS_FRACTION)
 	            SOOT_VOLUME_FRACTION = RHO(I,J,K)*SOOT_MASS_FRACTION/SOOT_DENSITY
-
-               IF (I==50 .AND. J==3 .AND. K==3) THEN
-               OPEN(UNIT=777,FILE='rcfsk_debug_callsite.txt',STATUS='UNKNOWN',POSITION='APPEND')
-
-   WRITE(777,*) '--------------------------------------------------'
-   WRITE(777,*) 'CALLSITE BEFORE RCFSK'
-   WRITE(777,*) 'I,J,K,IBND = ', I,J,K,IBND
-   WRITE(777,*) 'TMP = ', TMP(I,J,K)
-   WRITE(777,*) 'RHO = ', RHO(I,J,K)
-   WRITE(777,*) 'RSUM/R_MIXTURE = ', R_MIXTURE
-   WRITE(777,*) 'X_H2O = ', X_H2O
-   WRITE(777,*) 'X_CO2 = ', X_CO2
-   WRITE(777,*) 'X_CO  = ', X_CO
-   WRITE(777,*) 'SOOT_MASS_FRACTION = ', SOOT_MASS_FRACTION
-   WRITE(777,*) 'SOOT_VOLUME_FRACTION = ', SOOT_VOLUME_FRACTION
-   WRITE(777,*) 'SOOT_VOLUME_FRACTION_PPM = ', SOOT_VOLUME_FRACTION*1.E6_EB
-   CLOSE(777)
-   ENDIF
-
-
-
 	            CALL RCFSK (X_H2O,X_CO2,X_CO,SOOT_VOLUME_FRACTION,TMP(I,J,K),Kappa_RCFSK,a_RCFSK,IBND)
-
-            IF (I==50 .AND. J==3 .AND. K==3) THEN
-            OPEN(UNIT=777,FILE='rcfsk_debug_callsite.txt',STATUS='UNKNOWN',POSITION='APPEND')
-
-   WRITE(777,*) 'CALLSITE AFTER RCFSK'
-   WRITE(777,*) 'I,J,K,IBND = ', I,J,K,IBND
-   WRITE(777,*) 'Kappa_RCFSK = ', Kappa_RCFSK
-   WRITE(777,*) 'a_RCFSK     = ', a_RCFSK
-   WRITE(777,*) 'GLW(IBND)   = ', GLW(IBND)
-   WRITE(777,*) 'GLW*a*kappa = ', GLW(IBND)*a_RCFSK*Kappa_RCFSK
-   WRITE(777,*) 'E_unweighted = ', a_RCFSK*Kappa_RCFSK*FOUR_SIGMA*TMP(I,J,K)**4._EB
-   WRITE(777,*) 'E_weighted   = ', GLW(IBND)*a_RCFSK*Kappa_RCFSK*FOUR_SIGMA*TMP(I,J,K)**4._EB
-   WRITE(777,*) '--------------------------------------------------'
-   CLOSE(777)
-   ENDIF
-
-
-
                BBF = a_RCFSK
                KAPPA_GAS(I,J,K) = KAPPA_RCFSK 				! Absorp coeff for the jth gas                     
                KFST4_GAS(I,J,K) = BBF*KAPPA_GAS(I,J,K)*FOUR_SIGMA*TMP(I,J,K)**4._EB ! source term (Also Used in correction) 
