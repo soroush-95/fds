@@ -878,6 +878,7 @@ INTEGER :: NLAMBDAT               !< Number of wavelength subdivisions
 
 LOGICAL :: WIDE_BAND_MODEL        !< Non-gray gas, wide band model
 LOGICAL :: WSGG_MODEL             !< Weighted Sum of Gray Gas model
+LOGICAL :: RCFSK_MODEL            !< Rank Correlated Full Spectrum Correlated k-distribution model
 
 END MODULE RADCONS
 

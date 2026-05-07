@@ -327,6 +327,14 @@ REAL(EB), ALLOCATABLE, DIMENSION(:) :: WSGG_KAPPAP1_ARRAY,WSGG_KAPPAP2_ARRAY
 
 END MODULE WSGG_ARRAYS
 
+MODULE RCFSK_ARRAYS
+USE PRECISION_PARAMETERS
+
+INTEGER, PARAMETER :: NH2O=10, NCO2=10, NCO=3, NFV=3, NT=18, Re=501, NG=6  
+INTEGER :: rank
+INTEGER(KIND=8) :: d(7)
+REAL(EB), ALLOCATABLE, DIMENSION(:,:,:,:,:,:,:) :: FSK
+END MODULE RCFSK_ARRAYS
 
 MODULE MIEV
 
@@ -2763,7 +2771,7 @@ USE RADCAL_VAR
 IMPLICIT NONE (TYPE,EXTERNAL)
 PRIVATE
 
-PUBLIC INIT_RADIATION,COMPUTE_RADIATION,BLACKBODY_FRACTION
+PUBLIC INIT_RADIATION,COMPUTE_RADIATION,BLACKBODY_FRACTION, RCFSK
 
 REAL(EB) :: TYY_FAC
 INTEGER :: N_KAPPA_T=44                             !< Number of temperature points in absorption coefficient look-up table
@@ -2804,6 +2812,7 @@ USE COMP_FUNCTIONS, ONLY: SHUTDOWN
 USE MIEV
 USE RADCAL_CALC
 USE WSGG_ARRAYS
+USE RCFSK_ARRAYS
 REAL(EB) :: THETAUP,THETALOW,PHIUP,PHILOW,F_THETA,PLANCK_C2,KSI,LT,RCRHO,YY,BBF,AP0,AMEAN,RADIANCE,TRANSMISSIVITY,&
             THETA,PHI,DLO,XX
 INTEGER  :: N,I,J,K,IPC,IZERO,NN,NI,II,JJ,IIM,JJM,IBND,NS,NRA,NSB,RADCAL_TEMP(16)=0,RCT_SKIP=-1,IO
@@ -3083,7 +3092,7 @@ ENDIF INIT_WIDE_BAND
 !
 !-------------------------------------------------------------------------
 
-MAKE_KAPPA_ARRAYS: IF (.NOT.SOLID_PHASE_ONLY .AND. ANY(SPECIES%RADCAL_ID/='null') .AND. .NOT.WSGG_MODEL) THEN
+MAKE_KAPPA_ARRAYS: IF (.NOT.SOLID_PHASE_ONLY .AND. ANY(SPECIES%RADCAL_ID/='null') .AND. .NOT.WSGG_MODEL .AND. .NOT.RCFSK_MODEL) THEN
 
    ! Check for valid RADCAL species and setup arrays from ZZ to RADCAL_YY
 
@@ -3375,6 +3384,16 @@ MAKE_WSGG_ARRAYS: IF (.NOT.SOLID_PHASE_ONLY .AND. WSGG_MODEL) THEN
    WSGG_D_ARRAY(4,0:4) = (/ 109.81690_EB, -50.923590_EB,  23.432360_EB, -5.1638920_EB,  0.4393889_EB /)
 ENDIF MAKE_WSGG_ARRAYS
 
+! Reading FSK dataset Dataset is added in simulation input file directory
+IF (.NOT.SOLID_PHASE_ONLY .AND. RCFSK_MODEL) THEN 
+   OPEN(unit=10, file='FSK.bin', access='stream', form='unformatted', status='old', convert='little_endian', action='read')
+   READ(10) rank
+   READ(10) d
+   ALLOCATE(FSK(d(1), d(2), d(3), d(4), d(5), d(6),d(7)))
+   READ(10) FSK
+   CLOSE(10)
+ENDIF 
+
 TYY_FAC=N_KAPPA_T / (RTMPMAX-RTMPMIN)
 
 ! Tables for PARTICLE absorption coefficients
@@ -3498,6 +3517,14 @@ CHARACTER(20) :: FORMT
 REAL(EB) :: X_H2O, X_CO2, MOL_RAT,PARTIAL_P,R_MIXTURE,TOTAL_P
 REAL(EB), ALLOCATABLE, DIMENSION(:) :: Z_ARRAY
 
+
+! Variables added for RCFSK model 
+REAL(EB) :: Kappa_RCFSK, a_RCFSK, Tref
+REAL(EB), ALLOCATABLE, DIMENSION(:) :: GLW
+REAL(EB) :: X_CO, SOOT_VOLUME_FRACTION
+ALLOCATE (GLW(1:6)) !Gauss legendre Weights
+GLW(1:6) = [0.24914, 0.23349, 0.20317, 0.16008, 0.10694, 0.04717]
+
 ALLOCATE(Z_ARRAY(N_TRACKED_SPECIES))
 
 ALLOCATE( IJK_SLICE(3, IBAR*KBAR) )
@@ -3545,7 +3572,7 @@ IF (INIT_HRRPUV .AND. RAD_ITER>1) CALL ADD_VOLUMETRIC_HEAT_SOURCE(2)
 
 ! Initialize the radiative loss to zero for special case models that loop over wavelength bands
 
-IF (WIDE_BAND_MODEL .OR. WSGG_MODEL) THEN
+IF (WIDE_BAND_MODEL .OR. WSGG_MODEL .OR. RCFSK_MODEL) THEN
    QR = 0._EB
    IF (STORE_RADIATION_TERMS) THEN
       RADIATION_EMISSION   = 0._EB
@@ -3602,6 +3629,16 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
       MOL_RAT = GET_VOLUME_FRACTION(H2O_INDEX,Z_ARRAY,R_MIXTURE)/&
          (GET_VOLUME_FRACTION(CO2_INDEX,Z_ARRAY,R_MIXTURE)+TWENTY_EPSILON_EB) ! Molar ratio
       BBFA = A_WSGG(TMPA,MOL_RAT,IBND)
+   ELSEIF (RCFSK_MODEL) THEN
+	Z_ARRAY(1:N_TRACKED_SPECIES) = SPECIES_MIXTURE(1:N_TRACKED_SPECIES)%ZZ0     ! Mass frac of the tracked species in ambient
+      R_MIXTURE = RSUM0                                                           ! Specific gas constant of ambient
+      X_H2O = GET_VOLUME_FRACTION(H2O_INDEX,Z_ARRAY,R_MIXTURE)
+      X_CO2 = GET_VOLUME_FRACTION(CO2_INDEX,Z_ARRAY,R_MIXTURE)
+      X_CO = GET_VOLUME_FRACTION(CO_INDEX,Z_ARRAY,R_MIXTURE)
+      CALL GET_MASS_FRACTION(Z_ARRAY,SOOT_INDEX,SOOT_MASS_FRACTION)
+      SOOT_VOLUME_FRACTION = RHOA*SOOT_MASS_FRACTION/SOOT_DENSITY
+      CALL RCFSK (X_H2O,X_CO2,X_CO,SOOT_VOLUME_FRACTION,TMPA,Kappa_RCFSK,a_RCFSK,IBND)
+      BBFA = a_RCFSK
    ELSE
       BBFA = BLACKBODY_FRACTION(WL_LOW(IBND),WL_HIGH(IBND),TMPA)
    ENDIF
@@ -3753,7 +3790,78 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
             ENDDO
          ENDDO
       ENDDO
+      
+   ELSEIF (RCFSK_MODEL) THEN WIDE_BAND_MODEL_IF
 
+   ALPHA_CC = 1._EB
+      DO K=1,KBAR
+         DO J=1,JBAR
+            DO I=1,IBAR
+               IF (CELL(CELL_INDEX(I,J,K))%SOLID) CYCLE
+               IF (CC_IBM) THEN
+                  ALPHA_CC = 1._EB
+                  IF (CCVAR(I,J,K,CC_CGSC)==CC_SOLID) CYCLE
+                  IC = CCVAR(I,J,K,CC_IDCC)
+                  IF (IC>0) ALPHA_CC = CUT_CELL(IC)%ALPHA_CC
+               ENDIF
+               Z_ARRAY(1:N_TRACKED_SPECIES) = ZZ(I,J,K,1:N_TRACKED_SPECIES)                  ! Mass frac of the tracked species
+               R_MIXTURE = RSUM(I,J,K)                                                       ! Specific gas constant of the mixture
+               X_H2O = GET_VOLUME_FRACTION(H2O_INDEX,Z_ARRAY,R_MIXTURE)
+               X_CO2 = GET_VOLUME_FRACTION(CO2_INDEX,Z_ARRAY,R_MIXTURE)
+               X_CO  = GET_VOLUME_FRACTION(CO_INDEX,Z_ARRAY,R_MIXTURE)
+	            CALL GET_MASS_FRACTION(Z_ARRAY,SOOT_INDEX,SOOT_MASS_FRACTION)
+	            SOOT_VOLUME_FRACTION = RHO(I,J,K)*SOOT_MASS_FRACTION/SOOT_DENSITY
+
+               IF (I==50 .AND. J==3 .AND. K==3) THEN
+               OPEN(UNIT=777,FILE='rcfsk_debug_callsite.txt',STATUS='UNKNOWN',POSITION='APPEND')
+
+   WRITE(777,*) '--------------------------------------------------'
+   WRITE(777,*) 'CALLSITE BEFORE RCFSK'
+   WRITE(777,*) 'I,J,K,IBND = ', I,J,K,IBND
+   WRITE(777,*) 'TMP = ', TMP(I,J,K)
+   WRITE(777,*) 'RHO = ', RHO(I,J,K)
+   WRITE(777,*) 'RSUM/R_MIXTURE = ', R_MIXTURE
+   WRITE(777,*) 'X_H2O = ', X_H2O
+   WRITE(777,*) 'X_CO2 = ', X_CO2
+   WRITE(777,*) 'X_CO  = ', X_CO
+   WRITE(777,*) 'SOOT_MASS_FRACTION = ', SOOT_MASS_FRACTION
+   WRITE(777,*) 'SOOT_VOLUME_FRACTION = ', SOOT_VOLUME_FRACTION
+   WRITE(777,*) 'SOOT_VOLUME_FRACTION_PPM = ', SOOT_VOLUME_FRACTION*1.E6_EB
+   CLOSE(777)
+   ENDIF
+
+
+
+	            CALL RCFSK (X_H2O,X_CO2,X_CO,SOOT_VOLUME_FRACTION,TMP(I,J,K),Kappa_RCFSK,a_RCFSK,IBND)
+
+            IF (I==50 .AND. J==3 .AND. K==3) THEN
+            OPEN(UNIT=777,FILE='rcfsk_debug_callsite.txt',STATUS='UNKNOWN',POSITION='APPEND')
+
+   WRITE(777,*) 'CALLSITE AFTER RCFSK'
+   WRITE(777,*) 'I,J,K,IBND = ', I,J,K,IBND
+   WRITE(777,*) 'Kappa_RCFSK = ', Kappa_RCFSK
+   WRITE(777,*) 'a_RCFSK     = ', a_RCFSK
+   WRITE(777,*) 'GLW(IBND)   = ', GLW(IBND)
+   WRITE(777,*) 'GLW*a*kappa = ', GLW(IBND)*a_RCFSK*Kappa_RCFSK
+   WRITE(777,*) 'E_unweighted = ', a_RCFSK*Kappa_RCFSK*FOUR_SIGMA*TMP(I,J,K)**4._EB
+   WRITE(777,*) 'E_weighted   = ', GLW(IBND)*a_RCFSK*Kappa_RCFSK*FOUR_SIGMA*TMP(I,J,K)**4._EB
+   WRITE(777,*) '--------------------------------------------------'
+   CLOSE(777)
+   ENDIF
+
+
+
+               BBF = a_RCFSK
+               KAPPA_GAS(I,J,K) = KAPPA_RCFSK 				! Absorp coeff for the jth gas                     
+               KFST4_GAS(I,J,K) = BBF*KAPPA_GAS(I,J,K)*FOUR_SIGMA*TMP(I,J,K)**4._EB ! source term (Also Used in correction) 
+               IF (CHI_R(I,J,K)*Q(I,J,K)>QR_CLIP) THEN ! Precomputation of quantities for the RTE source term correction
+                  VOL = R(I)*DX(I)*DY(J)*DZ(K)*ALPHA_CC
+                  RAD_Q_SUM = RAD_Q_SUM + (GLW(IBND)*CHI_R(I,J,K)*Q(I,J,K) + GLW(IBND)*KAPPA_GAS(I,J,K)*UIID(I,J,K,IBND))*VOL
+                  KFST4_SUM = KFST4_SUM + GLW(IBND)*KFST4_GAS(I,J,K)*VOL
+               ENDIF
+            ENDDO
+         ENDDO
+      ENDDO
    ELSE WIDE_BAND_MODEL_IF
 
       ! Gray gas model
@@ -3882,7 +3990,7 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
 
    INTENSITY_UPDATE: IF (UPDATE_INTENSITY) THEN
 
-      IF (WIDE_BAND_MODEL .OR. WSGG_MODEL) THEN
+      IF (WIDE_BAND_MODEL .OR. WSGG_MODEL .OR. RCFSK_MODEL) THEN
          UIIOLD = UIID(:,:,:,IBND)
       ELSE
          UIIOLD = UII
@@ -3908,6 +4016,16 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
                   (GET_VOLUME_FRACTION(CO2_INDEX,Z_ARRAY,R_MIXTURE) + TWENTY_EPSILON_EB)
                BBF = A_WSGG(B1%TMP_F,MOL_RAT,IBND) ! Temperature coefficient for the jth gray gas in the boundary
             ENDIF                                     ! (use information of the cell adjacent to the boundary)
+            IF (RCFSK_MODEL) THEN
+               Z_ARRAY(1:N_TRACKED_SPECIES) = ZZ(BC%IIG,BC%JJG,BC%KKG,1:N_TRACKED_SPECIES)
+               R_MIXTURE = RSUM(BC%IIG,BC%JJG,BC%KKG)
+			      X_H2O = GET_VOLUME_FRACTION(H2O_INDEX,Z_ARRAY,R_MIXTURE)
+			      X_CO2 = GET_VOLUME_FRACTION(CO2_INDEX,Z_ARRAY,R_MIXTURE)
+               X_CO = GET_VOLUME_FRACTION(CO_INDEX,Z_ARRAY,R_MIXTURE)
+               CALL GET_MASS_FRACTION(Z_ARRAY,SOOT_INDEX,SOOT_MASS_FRACTION)
+	            SOOT_VOLUME_FRACTION = RHO(BC%IIG,BC%JJG,BC%KKG)*SOOT_MASS_FRACTION/SOOT_DENSITY
+	            CALL RCFSK (X_H2O,X_CO2,X_CO,SOOT_VOLUME_FRACTION,B1%TMP_F,Kappa_RCFSK,a_RCFSK,IBND)
+            ENDIF
             SF  => SURFACE(WC%SURF_INDEX)
             OUTRAD_W(IW) = BBF*RPI*B1%Q_RAD_OUT
          ENDIF
@@ -3961,7 +4079,7 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
 
          ! Zero out UIID, the integrated intensity
 
-         IF (WIDE_BAND_MODEL .OR. WSGG_MODEL) THEN
+         IF (WIDE_BAND_MODEL .OR. WSGG_MODEL .OR. RCFSK_MODEL) THEN
             UIID(:,:,:,IBND) = 0._EB
          ELSE
             UIID(:,:,:,ANGLE_INC_COUNTER) = 0._EB
@@ -4364,7 +4482,7 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
 
             ! Calculate integrated intensity UIID
 
-            IF (WIDE_BAND_MODEL .OR. WSGG_MODEL) THEN
+            IF (WIDE_BAND_MODEL .OR. WSGG_MODEL .OR. RCFSK_MODEL) THEN
                UIID(:,:,:,IBND) = UIID(:,:,:,IBND) + WEIGH_CYL*RSA(N)*IL
             ELSE
                UIID(:,:,:,ANGLE_INC_COUNTER) = UIID(:,:,:,ANGLE_INC_COUNTER) + WEIGH_CYL*RSA(N)*IL
@@ -4453,7 +4571,11 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
          ELSE
             EFLUX = 0._EB
          ENDIF
+         IF (RCFSK_MODEL) THEN   ! weighted summation for RCFSK
+         B1%Q_RAD_IN  = B1%Q_RAD_IN + B1%EMISSIVITY*(INRAD_W(IW)+BBFA*EFLUX)*GLW(IBND)
+         ELSE
          B1%Q_RAD_IN  = B1%Q_RAD_IN + B1%EMISSIVITY*(INRAD_W(IW)+BBFA*EFLUX)
+         ENDIF
       ENDDO
 
       DO ICF=INTERNAL_CFACE_CELLS_LB+1,INTERNAL_CFACE_CELLS_LB+N_INTERNAL_CFACE_CELLS
@@ -4473,7 +4595,11 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
          ELSE
             EFLUX = 0._EB
          ENDIF
+         IF (RCFSK_MODEL) THEN   ! weighted summation for RCFSK
+         B1%Q_RAD_IN  = B1%Q_RAD_IN + B1%EMISSIVITY*(INRAD_F(ICF)+BBFA*EFLUX)*GLW(IBND)
+         ELSE 
          B1%Q_RAD_IN  = B1%Q_RAD_IN + B1%EMISSIVITY*(INRAD_F(ICF)+BBFA*EFLUX)
+         ENDIF
       ENDDO
 
    ENDIF INTENSITY_UPDATE
@@ -4489,12 +4615,23 @@ BAND_LOOP: DO IBND = 1,NUMBER_SPECTRAL_BANDS
       IF (N_LP_ARRAY_INDICES>0 .AND. PARTICLES_EXISTED) QR_W = QR_W + KAPPA_PART*UIID(:,:,:,IBND) - KFST4_PART
    ENDIF
 
+   IF (RCFSK_MODEL) THEN 
+      QR = QR + (GLW(IBND)*KAPPA_GAS*UIID(:,:,:,IBND)-GLW(IBND)*KFST4_GAS) 
+      IF (STORE_RADIATION_TERMS) THEN 
+         RADIATION_EMISSION   = RADIATION_EMISSION + GLW(IBND)*KFST4_GAS
+         RADIATION_ABSORPTION = RADIATION_ABSORPTION + KAPPA_GAS*UIID(:,:,:,IBND)*GLW(IBND)
+      ENDIF
+      IF (N_LP_ARRAY_INDICES>0 .AND. PARTICLES_EXISTED) QR_W = QR_W + KAPPA_PART*UIID(:,:,:,IBND) - KFST4_PART
+   ENDIF
+
 ENDDO BAND_LOOP
 
 ! Sum up intensities and compute incoming flux at open boundaries
-
-IF (UPDATE_INTENSITY) THEN
-
+IF (UPDATE_INTENSITY .AND. RCFSK_MODEL) THEN ! For RCFSK_MODEL summation has to be weighted
+   DO IBND=1, NUMBER_SPECTRAL_BANDS
+      UII =UII + (UIID(:,:,:,IBND)*GLW(IBND))
+   ENDDO
+ELSE IF (UPDATE_INTENSITY) THEN
    UII = SUM(UIID, DIM = 4)
 
    DO IW=1,N_EXTERNAL_WALL_CELLS
@@ -4504,7 +4641,11 @@ IF (UPDATE_INTENSITY) THEN
       BR => BOUNDARY_RADIA(WC%BR_INDEX)
       B1%Q_RAD_IN = 0._EB
       DO IBND=1,NUMBER_SPECTRAL_BANDS
+         IF (RCFSK_MODEL) THEN
+         B1%Q_RAD_IN  = B1%Q_RAD_IN + SUM(BR%BAND(IBND)%ILW(1:NUMBER_RADIATION_ANGLES)*GLW(IBND))
+         ELSE
          B1%Q_RAD_IN  = B1%Q_RAD_IN + SUM(BR%BAND(IBND)%ILW(1:NUMBER_RADIATION_ANGLES))
+         ENDIF
       ENDDO
    ENDDO
 
@@ -4513,7 +4654,7 @@ ENDIF
 ! Save source term for the energy equation (QR = -DIV Q) for the one-band (gray gas) case.
 ! QR for wide-band model is saved elsewhere.
 
-IF (.NOT. (WIDE_BAND_MODEL .OR. WSGG_MODEL)) THEN
+IF (.NOT. (WIDE_BAND_MODEL .OR. WSGG_MODEL .OR. RCFSK_MODEL)) THEN
    QR = KAPPA_GAS*UII - KFST4_GAS
    IF (N_LP_ARRAY_INDICES>0) QR_W = QR_W + KAPPA_PART*UII - KFST4_PART
    IF (STORE_RADIATION_TERMS) THEN
@@ -4546,7 +4687,11 @@ IF (SOLID_PARTICLES .AND. UPDATE_INTENSITY) THEN
             BR => BOUNDARY_RADIA(LP%BR_INDEX)
             B1%Q_RAD_IN = 0._EB
             DO IBND=1,NUMBER_SPECTRAL_BANDS
+            IF (RCFSK_MODEL) THEN 
+            B1%Q_RAD_IN = B1%Q_RAD_IN + B1%EMISSIVITY * (WEIGH_CYL*SUM(BR%BAND(IBND)%ILW(1:NUMBER_RADIATION_ANGLES)*GLW(IBND)) + EFLUX)
+            ELSE
                B1%Q_RAD_IN = B1%Q_RAD_IN + B1%EMISSIVITY * (WEIGH_CYL*SUM(BR%BAND(IBND)%ILW(1:NUMBER_RADIATION_ANGLES)) + EFLUX)
+            ENDIF
             ENDDO
          ELSE
             BC => BOUNDARY_COORD(LP%BC_INDEX)
@@ -4824,6 +4969,115 @@ KAPPA_SOOT = SOOT_MASS_CONCENTRATION*(1232.4_EB+0.591552_EB*(TTMP-2000._EB))
 
 END FUNCTION KAPPA_SOOT
 
+!===================================================================
+! Subroutine for RCFSK_MODEL  
+!==================================================================
+SUBROUTINE RCFSK(X_H2O,X_CO2,X_CO,FV_IN,TTMP,KAPPA_FSK,A_FSK,iFSK)
+USE MATH_FUNCTIONS, ONLY: INTERPOLATE1D
+USE RCFSK_ARRAYS
+IMPLICIT NONE
+
+REAL(EB), INTENT(IN)  :: X_H2O, X_CO2, X_CO, FV_IN, TTMP
+INTEGER , INTENT(IN)  :: iFSK
+REAL(EB), INTENT(OUT) :: KAPPA_FSK, A_FSK
+
+LOGICAL , SAVE :: INIT_GRID = .FALSE.
+
+REAL(EB), SAVE :: MR(NH2O), MR_CO(NCO), FV(NFV), TG(NT)
+REAL(EB) :: TT, X1, X2, X3, FVS
+REAL(EB) :: A_FV(NFV), K_FV(NFV)
+REAL(EB) :: ARR_T_A(NT), ARR_T_K(NT)
+REAL(EB) :: ARR_X1_A(NH2O), ARR_X1_K(NH2O)
+REAL(EB) :: ARR_X2_A(NCO2), ARR_X2_K(NCO2)
+REAL(EB) :: ARR_X3_A(NCO),  ARR_X3_K(NCO)
+REAL(EB) :: WORK_T_A(NH2O,NCO2,NCO), WORK_T_K(NH2O,NCO2,NCO)
+REAL(EB) :: WORK_X1_A(NCO2,NCO), WORK_X1_K(NCO2,NCO)
+REAL(EB) :: WORK_X2_A(NCO), WORK_X2_K(NCO)
+REAL(EB) :: TLOG
+INTEGER  :: I, J, K, L, M
+
+IF (.NOT. INIT_GRID) THEN
+   MR    = (/ 0._EB, 0.001_EB, 0.01_EB, 0.05_EB, 0.10_EB, 0.15_EB, 0.20_EB, 0.25_EB, 0.30_EB, 0.35_EB /)
+   MR_CO = (/ 0._EB, 0.1_EB, 0.3_EB /)
+   FV    = (/ 0._EB, 0.01E-6_EB, 20.E-6_EB /)
+
+   DO I=1,NT
+      TG(I) = 300._EB + REAL(I-1,EB)*(2000._EB-300._EB)/REAL(NT-1,EB)
+   ENDDO
+
+   INIT_GRID = .TRUE.
+ENDIF
+
+TT  = MAX(TG(1),          MIN(TTMP,   TG(NT)))
+X1  = MAX(MR(1),      MIN(X_H2O,  MR(NH2O)))
+X2  = MAX(MR(1),      MIN(X_CO2,  MR(NCO2)))
+X3  = MAX(MR_CO(1),       MIN(X_CO,   MR_CO(NCO)))
+FVS = FV_IN
+
+
+DO M=1,NFV
+
+   ! Interpolating a and K through temp 
+DO J=1,NH2O
+      DO K=1,NCO2
+         DO L=1,NCO
+            DO I=1,NT
+               ARR_T_A(I) = FSK(iFSK,I,J,K,L,M,1)
+               ARR_T_K(I) = FSK(iFSK,I,J,K,L,M,2)
+            ENDDO
+            CALL INTERPOLATE1D(TG,ARR_T_A,TT,WORK_T_A(J,K,L))
+            CALL INTERPOLATE1D(TG,ARR_T_K,TT,WORK_T_K(J,K,L))
+         ENDDO
+      ENDDO
+   ENDDO
+
+   ! Interpolate in H2O
+   DO K=1,NCO2
+      DO L=1,NCO
+         DO J=1,NH2O
+            ARR_X1_A(J) = WORK_T_A(J,K,L)
+            ARR_X1_K(J) = WORK_T_K(J,K,L)
+         ENDDO
+         CALL INTERPOLATE1D(MR,ARR_X1_A,X1,WORK_X1_A(K,L))
+         CALL INTERPOLATE1D(MR,ARR_X1_K,X1,WORK_X1_K(K,L))
+      ENDDO
+   ENDDO
+
+   ! Interpolate in CO2
+   DO L=1,NCO
+      DO K=1,NCO2
+         ARR_X2_A(K) = WORK_X1_A(K,L)
+         ARR_X2_K(K) = WORK_X1_K(K,L)
+      ENDDO
+      CALL INTERPOLATE1D(MR,ARR_X2_A,X2,WORK_X2_A(L))
+      CALL INTERPOLATE1D(MR,ARR_X2_K,X2,WORK_X2_K(L))
+   ENDDO
+
+   ! Interpolate in CO
+   DO L=1,NCO
+      ARR_X3_A(L) = WORK_X2_A(L)
+      ARR_X3_K(L) = WORK_X2_K(L)
+   ENDDO
+   CALL INTERPOLATE1D(MR_CO,ARR_X3_A,X3,A_FV(M))
+   CALL INTERPOLATE1D(MR_CO,ARR_X3_K,X3,K_FV(M))
+
+ENDDO
+
+! Final soot interpolation for a
+IF (FVS <= 0._EB) THEN
+   A_FSK = A_FV(1)
+ELSEIF (FVS <= FV(2)) THEN
+   A_FSK = A_FV(1) + (FVS-FV(1))/(FV(2)-FV(1)) * (A_FV(2)-A_FV(1))
+ELSE
+   TLOG = (LOG10(FVS) - LOG10(FV(2))) / (LOG10(FV(3)) - LOG10(FV(2)))
+   A_FSK = A_FV(2) + TLOG*(A_FV(3)-A_FV(2))
+ENDIF
+
+! Final soot interpolation for K
+CALL INTERPOLATE1D(FV,K_FV,FVS,KAPPA_FSK)
+
+END SUBROUTINE RCFSK
+!===================================================================================	    
 
 END MODULE RAD
 

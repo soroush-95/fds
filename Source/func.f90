@@ -6684,8 +6684,8 @@ CALL GET_DATE(DATE)
 
 WRITE(LU,'(/A/)')      ' Fire Dynamics Simulator'
 WRITE(LU,'(A,A)')      ' Current Date     : ',TRIM(DATE)
-WRITE(LU,'(A,A)')      ' Revision         : ',TRIM(GITHASH_PP)
-WRITE(LU,'(A,A)')      ' Revision Date    : ',TRIM(GITDATE_PP)
+WRITE(LU,'(A,A)')      ' Revision         : ',TRIM("unknown")
+WRITE(LU,'(A,A)')      ' Revision Date    : ',TRIM("unknown")
 WRITE(LU,'(A,A)')      ' Compiler         : ',TRIM(COMPILER_VERSION())
 WRITE(LU,'(A,A/)')     ' Compilation Date : ',TRIM(BUILDDATE_PP)
 
